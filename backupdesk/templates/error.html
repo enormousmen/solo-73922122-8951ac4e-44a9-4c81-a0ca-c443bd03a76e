@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}请求未完成{% endblock %}
+{% block body %}
+<section class="card">
+  <h2>请求未完成</h2>
+  <p>{{ message }}</p>
+  <p><a href="{{ url_for('index') }}">返回备份台</a></p>
+</section>
+{% endblock %}

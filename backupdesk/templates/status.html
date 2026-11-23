@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}状态 JSON{% endblock %}
+{% block body %}
+<section class="card">
+  <h2>status</h2>
+  <pre class="mono" style="white-space:pre-wrap;word-break:break-word">{{ status | tojson(indent=2) }}</pre>
+</section>
+{% endblock %}

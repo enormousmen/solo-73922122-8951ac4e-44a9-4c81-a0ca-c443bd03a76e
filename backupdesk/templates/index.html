@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block title %}备份台状态{% endblock %}
+{% block body %}
+{% if status.app.last_tick_error %}
+  <div class="errors">调度器最近一次报错：<code>{{ status.app.last_tick_error }}</code></div>
+{% endif %}
+{% if status.app.invariants %}
+  <div class="errors">一致性告警：{{ status.app.invariants | join('；') }}</div>
+{% endif %}
+
+<div class="grid">
+  <section class="card">
+    <h2>今日窗口</h2>
+    <dl class="kv">
+      <dt>当地日期</dt><dd class="mono">{{ status.today.local_date }} <span class="muted">（{{ status.window.timezone }}）</span></dd>
+      <dt>窗口状态</dt>
+      <dd>
+        {% if status.window.phase == 'open' %}<span class="chip ok">开放作业</span>
+        {% elif status.window.phase == 'before' %}<span class="chip">尚未开始</span>
+        {% else %}<span class="chip bad">已关闭</span>{% endif %}
+      </dd>
+      <dt>01:30 起</dt><dd class="mono">{{ status.window.start_local }} <span class="muted">= {{ status.window.start_utc }}</span></dd>
+      <dt>03:00 止</dt><dd class="mono">{{ status.window.end_local }} <span class="muted">= {{ status.window.end_utc }}</span></dd>
+      <dt>实际时长</dt><dd>{{ status.window.duration_seconds // 60 }} 分钟<span class="muted">（回拨日为 150，春季为 30）</span></dd>
+      <dt>下一个窗口</dt><dd class="mono">{{ status.next_window.local_date }} 01:30 → {{ status.next_window.start_utc }}</dd>
+    </dl>
+  </section>
+
+  <section class="card">
+    <h2>时钟</h2>
+    <dl class="kv">
+      <dt>模式</dt>
+      <dd>{% if status.clock.mode == 'simulated' %}<span class="chip warn">演练 UTC 时钟</span>{% else %}<span class="chip ok">真实时间</span>{% endif %}</dd>
+      <dt>生效 UTC</dt><dd class="mono">{{ status.clock.effective_utc }}</dd>
+      <dt>生效纽约时间</dt><dd class="mono">{{ status.clock.effective_new_york }}</dd>
+      <dt>真实 UTC</dt><dd class="mono muted">{{ status.clock.real_utc }}</dd>
+    </dl>
+    <p class="muted" style="font-size:12.5px;margin:12px 0 0">
+      演练时钟是固定时刻，不会自行走动；翻到下一个时刻再点“推进 tick”。
+    </p>
+  </section>
+
+  <section class="card">
+    <h2>今日作业</h2>
+    {% set job = status.today.job %}
+    {% if job %}
+      <dl class="kv">
+        <dt>状态</dt><dd><span class="status-{{ job.status }}">{{ job.status }}</span></dd>
+        <dt>触发</dt><dd>{{ job.trigger or '—' }} · 尝试 {{ job.attempts }} 次</dd>
+        <dt>开始 / 结束</dt><dd class="mono">{{ job.started_at | shortts }}<br>{{ job.finished_at | shortts }}</dd>
+        <dt>下次重试</dt><dd class="mono">{{ job.next_attempt_at | shortts }}</dd>
+        <dt>说明</dt><dd>{{ job.error or '—' }}</dd>
+      </dl>
+    {% else %}
+      <p class="muted">今日还没有作业记录。窗口内调度器会自动建单。</p>
+    {% endif %}
+    <hr style="border:none;border-top:1px solid var(--line);margin:12px 0">
+    {% set a = status.today.artifact %}
+    {% if a %}
+      <dl class="kv">
+        <dt>成品文件</dt><dd class="mono">{{ a.filename }}</dd>
+        <dt>大小</dt><dd>{{ a.size_bytes }} 字节 · {{ a.pages }} 页</dd>
+        <dt>SHA-256</dt><dd class="mono" style="word-break:break-all">{{ a.sha256 }}</dd>
+        <dt>下载</dt>
+        <dd>
+          {% if status.today.download_ready %}
+            <a href="{{ url_for('download', day=a.local_date) }}">下载 {{ a.filename }}</a>
+            · <a href="{{ url_for('verify', day=a.local_date) }}">深度校验</a>
+          {% else %}
+            <span class="chip bad">文件缺失</span>
+          {% endif %}
+        </dd>
+      </dl>
+    {% else %}
+      <p class="muted">今日还没有已登记的成品。</p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h2>台账源</h2>
+    <dl class="kv">
+      <dt>路径</dt><dd class="mono" style="word-break:break-all">{{ status.ledger.path }}</dd>
+      <dt>存在</dt><dd>{{ '是' if status.ledger.present else '否' }} · {{ status.ledger.size_bytes }} 字节</dd>
+      <dt>WAL</dt><dd>{{ '存在（在线写入中）' if status.ledger.wal_present else '无' }}</dd>
+    </dl>
+    {% if ledger_summary %}
+      <hr style="border:none;border-top:1px solid var(--line);margin:12px 0">
+      <dl class="kv">
+        <dt>聚合一致性</dt>
+        <dd>{% if ledger_summary.ok %}<span class="chip ok">通过</span>{% else %}<span class="chip bad">不一致</span>{% endif %}</dd>
+        <dt>条目 / 金额</dt><dd>{{ ledger_summary.entries }} 条 · {{ ledger_summary.entry_sum_cents }} 分</dd>
+        <dt>日汇总</dt><dd>{{ ledger_summary.totals_entries }} 条 · {{ ledger_summary.totals_cents }} 分</dd>
+        <dt>日级差异</dt><dd>{{ ledger_summary.day_mismatches }}</dd>
+      </dl>
+    {% endif %}
+  </section>
+</div>
+
+<section class="card" style="margin-top:16px">
+  <h2>演练控制（UTC 时刻）</h2>
+  {% if drill_token_required %}
+    <p class="muted" style="font-size:12.5px">此实例设置了 DRILL_TOKEN；下列每个动作都需要带上同一个令牌。</p>
+  {% endif %}
+  <form class="inline" method="post" action="{{ url_for('drill_clock') }}">
+    <input type="text" name="utc" placeholder="2026-11-01T05:30:00Z" value="{{ status.clock.simulated_utc or '' }}">
+    {% if drill_token_required %}<input type="text" name="drill_token" placeholder="DRILL_TOKEN" required>{% endif %}
+    <button type="submit">设置演练时钟</button>
+  </form>
+  <form class="actions" method="post" style="margin-top:10px;display:block">
+    {% if drill_token_required %}<input type="text" name="drill_token" placeholder="DRILL_TOKEN" required style="margin-bottom:6px">{% endif %}
+    <button class="secondary" type="submit" formaction="{{ url_for('drill_tick') }}">推进 tick</button>
+    <button class="secondary" type="submit" formaction="{{ url_for('drill_restart') }}">模拟重启恢复</button>
+    <button class="secondary" type="submit" formaction="{{ url_for('drill_real_clock') }}">恢复真实时钟</button>
+  </form>
+  <p class="muted" style="font-size:12.5px;margin-bottom:0">
+    便于自动化的接口：<code>POST /drill/clock</code>、<code>POST /drill/tick</code>、
+    <code>POST /drill/restart</code>、<code>POST /drill/real-clock</code>，均接受 <code>?format=json</code>。
+  </p>
+</section>
+
+<div class="grid" style="margin-top:16px">
+  <section class="card">
+    <h2>最近作业</h2>
+    <table>
+      <thead><tr><th>当地日期</th><th>状态</th><th>尝试</th><th>完成时间 (UTC)</th><th>说明</th></tr></thead>
+      <tbody>
+      {% for job in status.jobs %}
+        <tr>
+          <td class="mono">{{ job.local_date }}</td>
+          <td><span class="status-{{ job.status }}">{{ job.status }}</span></td>
+          <td>{{ job.attempts }}</td>
+          <td class="mono">{{ job.finished_at | shortts }}</td>
+          <td>{{ job.error or '—' }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="muted">暂无</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>成品列表</h2>
+    <table>
+      <thead><tr><th>当地日期</th><th>文件</th><th>大小</th><th>SHA-256 前缀</th><th></th></tr></thead>
+      <tbody>
+      {% for a in status.artifacts %}
+        <tr>
+          <td class="mono">{{ a.local_date }}</td>
+          <td class="mono">{{ a.filename }}{% if a.adopted %} <span class="chip">接管</span>{% endif %}</td>
+          <td>{{ a.size_bytes }}</td>
+          <td class="mono">{{ a.sha256[:16] }}…</td>
+          <td>{% if a.present %}<a href="{{ url_for('download', day=a.local_date) }}">下载</a>{% else %}<span class="chip bad">缺失</span>{% endif %}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="muted">暂无成品</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+
+<section class="card" style="margin-top:16px">
+  <h2>事件日志</h2>
+  <table class="event">
+    <thead><tr><th style="width:200px">时间 (UTC)</th><th style="width:150px">类型</th><th>详情</th></tr></thead>
+    <tbody>
+    {% for e in status.events %}
+      <tr><td class="mono">{{ e.at_utc | shortts }}</td><td class="mono">{{ e.kind }}</td><td>{{ e.detail }}</td></tr>
+    {% else %}
+      <tr><td colspan="3" class="muted">暂无事件</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<p class="muted" style="margin-top:18px;font-size:12.5px">
+  版本 {{ status.app.version }} · 实例 {{ status.app.owner }} · 调度心跳 {{ status.app.last_tick_at | shortts }}
+  · 结构化状态：<a href="{{ url_for('status') }}?format=json">/status.json</a>
+</p>
+{% endblock %}
